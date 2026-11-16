@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.coverage
+.pytest_cache/
+.DS_Store
+prusa_account.json
+prusa_account.json.tmp
