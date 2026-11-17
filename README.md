@@ -2,7 +2,7 @@
 
 Reads the filament Prusa Connect has for each tool of your printer, and selects the installed filament preset that matches it for that tool's filament slot: vendor, material and color, and for a material assigned in Prusa Connect, its product name. Requires OrcaSlicer 2.5.1 or later and a Prusa Account with your printer in Prusa Connect.
 
-It is the OrcaSlicer counterpart of **Sync Filaments from Printer** reading Prusa Connect in [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer), and matches presets as [PrusaLink Filament Match](https://github.com/hyiger/orcaslicer-prusalink-filament-match) does, which reads the printer itself over your network instead.
+It is the OrcaSlicer counterpart of **Sync Filaments from Printer** reading Prusa Connect in [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer), and matches presets as [PrusaLink Filament Sync](https://github.com/hyiger/orcaslicer-prusalink-filament-sync) does, which reads the printer itself over your network instead.
 
 ## Using it
 
