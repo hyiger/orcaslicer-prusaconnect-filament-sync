@@ -67,6 +67,15 @@ python3 -m venv .venv
 
 `pytest` fails below 100% line and branch coverage. Tests run against a stand-in for OrcaSlicer's `orca` module and a stand-in Prusa Account and Prusa Connect served over real HTTP, in `tests/conftest.py`. Prusa Account checks the PKCE verifier, takes a code once and replaces the refresh token at each use, and Prusa Connect answers only a current access token. The `orca` stand-in holds the rules found by testing the PrusaLink plugin in OrcaSlicer: a slot's selector offers only presets that are shown and compatible, or the slot's own, and `find_preset()` returns the edited copy of the selected preset.
 
+## Publishing
+
+Each GitHub release publishes `orca_prusaconnect_filament_sync_any.py` to the plugin's Orca Cloud listing, through `.github/workflows/publish-orcacloud.yml`, which follows [Orca Cloud's guide](https://cloud.orcaslicer.com/wiki/). The repository must first be connected to the listing, in its **Edit plugin** > **GitHub publishing**.
+
+1. Raise `version` in the plugin's header and push.
+2. Create a release whose tag is that version with a `v`, such as `v1.2.0`. Orca Cloud needs it higher than the listing's current version. The release notes become the changelog.
+
+The workflow stops if the tag is not the header's version.
+
 ## Testing in OrcaSlicer
 
 The unit tests cannot reach the steps below, which need the running app and a real Prusa Account.
