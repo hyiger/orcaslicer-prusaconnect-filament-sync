@@ -97,6 +97,8 @@ ABRASIVE_WORDS = re.compile(r"""
                  | carbon (?: [\W_]?fib | (?![a-z]) (?![\W_]*(?:black|gr[ae]y)(?![a-z])) )
                  | glass [\W_]?fib )
 """, re.IGNORECASE | re.VERBOSE)
+# Vendors whose Carbon is carbon fiber whatever color follows it, as in Kimya PETG Carbon Black.
+CARBON_FIBER_VENDORS = frozenset({"kimya"})
 HEX_COLOR = re.compile(r"#?([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?")
 NUMBER_LIST = re.compile(r"[+-]?\d*\.?\d+%?(,[+-]?\d*\.?\d+%?)*")
 # Connect numbers a printer's tools from 0. An MMU's slots have a dot, as in 0.0.
@@ -432,6 +434,13 @@ def code_from(text, state):
                     f"{REDIRECT_URI}?code=")
 
 
+def private_file(path, flags):
+    """Open *path* as a file only its owner can read. Opened by path, never by descriptor: OrcaSlicer's audit
+    hook cannot place os.fdopen()'s descriptor inside the plugin's folder, so it asks the user, and refuses
+    the attempt that made it ask, after Prusa Account has taken the code or replaced the refresh token."""
+    return os.open(path, flags, 0o600)
+
+
 class Account:
     """The Prusa Account sign-in, kept in a file. Prusa Account replaces the refresh token at each use, so the
     new one is saved before the access token is used."""
@@ -453,8 +462,7 @@ class Account:
         stored = {key: tokens[key] for key in ("access_token", "refresh_token")}
         temporary = self.path.with_name(self.path.name + ".tmp")
         try:
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            with open(temporary, "w", encoding="utf-8", opener=private_file) as file:
                 json.dump(stored, file)
             os.replace(temporary, self.path)
         except OSError as error:
@@ -573,6 +581,7 @@ class ConnectPrinter:
     tools: dict
     unreadable: list
     feeder: bool
+    tool_count: int = 0
 
     def label(self):
         details = ", ".join(part for part in (self.model, self.state.capitalize()) if part)
@@ -667,8 +676,10 @@ def read_printer(entry):
             unreadable.append(key)
         else:
             tools[tool.number] = tool
+    count = entry.get("tool_count")
+    tool_count = count if type(count) is int else len(tools) + len(unreadable)
     return ConnectPrinter(uuid, text_at(entry, "name"), text_at(entry, "connect_state"), text_at(entry, "model"),
-                          models, tools, unreadable, feeder)
+                          models, tools, unreadable, feeder, tool_count)
 
 
 def parse_printers(body):
@@ -693,9 +704,9 @@ def model_fit(printer, printer_model):
     return max((len(key) for key in map(fold, printer.models) if key and key in profile), default=0)
 
 
-def choose_printer(printers, wanted, printer_model):
+def choose_printer(printers, wanted, printer_model, tool_count=0):
     """Return the Connect printer to read: the one named in the Config tab, else the one that fits the printer
-    profile best, else the one the user picks."""
+    profile best, its model, then its *tool_count* tools, else the one the user picks."""
     names = ", ".join(printer.name or printer.uuid for printer in printers)
     if not printers:
         raise SyncError("Your Prusa Connect account has no printers. Add your printer in Prusa Connect.")
@@ -710,6 +721,9 @@ def choose_printer(printers, wanted, printer_model):
     else:
         best = max(model_fit(printer, printer_model) for printer in printers)
         candidates = [printer for printer in printers if model_fit(printer, printer_model) == best]
+        if best and len(candidates) > 1:
+            # Connect's models of an XL, XLIS and XL5IS, share only XL with "Prusa XL 5T": its tools tell them apart.
+            candidates = [printer for printer in candidates if printer.tool_count == tool_count] or candidates
         if len(candidates) == 1:
             return candidates[0]
         intro = ("Several printers in your Prusa Connect account fit this printer profile." if best else
@@ -768,6 +782,13 @@ def same_material(reported, material):
     return reported == material or (len(reported) == MATERIAL_NAME_LENGTH and material.startswith(reported))
 
 
+def names_fiber(text, vendor):
+    """Whether *text* names carbon or glass fiber, as PA-CF, GF15, Carbon Fiber and ABS Carbon do. Carbon Black
+    is a color, except from a vendor whose Carbon line is carbon fiber filled, as Kimya's PETG Carbon Black is."""
+    return bool(ABRASIVE_WORDS.search(text)) or (
+        vendor_key(vendor) in CARBON_FIBER_VENDORS and "carbon" in word_list(text))
+
+
 @dataclasses.dataclass
 class Candidate:
     """A filament preset, as far as matching it to a tool goes. *named* holds the words its color and kind are
@@ -800,13 +821,17 @@ def candidate(name, label, values, parent="", system=False):
 
     material = first("filament_type")
     label_words, parent_words = (PRINTER_PART.sub(" ", text) for text in (label, parent))
-    named = frozenset(words(f"{label_words} {parent_words}"))
+    own, inherited = words(label_words), words(parent_words)
+    if own & PRINTER_COLORS:
+        # Spike PLA Blue, saved from Spike PLA Red, is blue.
+        inherited -= PRINTER_COLORS
+    named = frozenset(own | inherited)
     color = parse_color(first("default_filament_colour"))
     if color == BLANK_COLOR and "gray" not in named:
         color = None
     # Carbon or glass fiber by name or type. The INDX profiles also treat a filament that needs a hardened
     # nozzle as abrasive.
-    fiber = any(ABRASIVE_WORDS.search(text) for text in (label_words, parent_words, material))
+    fiber = any(names_fiber(text, first("filament_vendor")) for text in (label_words, parent_words, material))
     abrasive = fiber or first("required_nozzle_HRC") not in ("", "0")
     return Candidate(name, label, first("filament_vendor"), material, color, abrasive, named, system,
                      label_words, parent_words, fiber)
@@ -868,7 +893,7 @@ def missing_words(tool, preset):
     """Words of the tool's product name that a preset lacks in its name, vendor and material: Pro PCTG
     Daffodil Yellow lacks Translucent of Pro PCTG, Translucent Yellow."""
     has = set(product_words(preset.title)) | set(product_words(preset.vendor)) | set(product_words(preset.material))
-    return sum(1 for word in tool_product(tool) if word not in has)
+    return sum(1 for word in tool_product(tool) if word not in has and not word.isdigit())
 
 
 def foreign_words(tool, preset):
@@ -893,7 +918,7 @@ def foreign_words(tool, preset):
 
 def tool_fiber(tool):
     """Whether the tool's product names carbon or glass fiber, or carbon alone, as Kimya ABS Carbon does."""
-    return bool(ABRASIVE_WORDS.search(tool.product)) or "carbon" in word_list(tool.product)
+    return names_fiber(tool.product, tool.vendor)
 
 
 def product_fit(tool, preset):
@@ -945,10 +970,10 @@ def options(tool, presets, current):
     plain from matte, silk or carbon fiber filament: the user picks among presets that fit as well. The slot's
     own preset is the default when it fits as well, since the user chose it.
     """
-    ranked = [preset for preset in presets if matches(tool, preset)]
-    if current is not None and matches(tool, current) and all(preset.name != current.name for preset in ranked):
-        # A slot may hold a preset the dropdown no longer offers, such as a hidden one.
-        ranked.append(current)
+    # The slot's preset is judged as edited, since the slot uses its edits, in place of the saved copy the
+    # dropdown lists. A slot may also hold a preset the dropdown no longer offers, such as a hidden one.
+    pool = [preset for preset in presets if current is None or preset.name != current.name]
+    ranked = [preset for preset in [*pool, *([current] if current is not None else [])] if matches(tool, preset)]
     ranked.sort(key=lambda preset: preference(tool, preset))
     tier = [preset for preset in ranked if fit(tool, preset) == fit(tool, ranked[0])]
     best = [preset for preset in tier if not any(beats(tool, other, preset) for other in tier)]
@@ -996,6 +1021,9 @@ def step_notes(step, nozzles):
         notes.append(f"no installed {tool.describe()} preset is {tool_color}")
     if abrasive:
         notes.append("it is abrasive, and the nozzle is not hardened")
+    elif step.abrasive is None and tool.hardened is False and tool_fiber(tool):
+        # A preset that does not name the fiber is no less abrasive in use.
+        notes.append(f"{tool.product} is abrasive, and the nozzle is not hardened")
     if not tool.vendor and not step.kept:
         notes.append("Prusa Connect names no vendor: assign the filament on the printer's Tools page in Prusa Connect")
     profile_nozzle = nozzles[min(tool.number, len(nozzles)) - 1] if nozzles else None
@@ -1044,7 +1072,8 @@ def sync(config):
     bundle = orca.host.preset_bundle()
     printers = Account(ACCOUNT_FILE).printers()
     printer_model = unescaped(bundle.full_config_value("printer_model") or "")
-    printer = choose_printer(printers, str(config.get("printer") or ""), printer_model)
+    nozzles = [float(item) for item in (bundle.full_config_value("nozzle_diameter") or "").split(",") if item]
+    printer = choose_printer(printers, str(config.get("printer") or ""), printer_model, len(nozzles))
     name = printer.name or printer.uuid
     if printer.feeder:
         raise SyncError(f"{name} has an MMU, whose slots this plugin does not read yet. Nothing was changed.")
@@ -1057,7 +1086,6 @@ def sync(config):
     # A slot may hold a preset the dropdown no longer offers, such as a hidden one, and it can keep it.
     current = [preset_candidate(preset) if (preset := bundle.filaments.find_preset(slot)) is not None else None
                for slot in slot_names]
-    nozzles = [float(item) for item in (bundle.full_config_value("nozzle_diameter") or "").split(",") if item]
     tools = [tool for _, tool in sorted(printer.tools.items())]
     loaded = [tool for tool in tools if tool.material]
     steps = [Step(tool, current[tool.number - 1].label if current[tool.number - 1] else slot_names[tool.number - 1],

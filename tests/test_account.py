@@ -2,12 +2,35 @@
 import io
 import json
 import socket
+import sys
 import urllib.error
 import urllib.parse
 
 import pytest
 
 from conftest import NotificationLevel, PluginResult, connect_printer, connect_tool, preset
+
+
+# OrcaSlicer's audit hook places a file write by its path, and asks the user about, then refuses, one it cannot
+# place: an open() of a bare file descriptor, as os.fdopen() makes. An audit hook cannot be removed, so this one
+# acts only while a test turns it on.
+DESCRIPTORS = {"denied": False, "seen": []}
+
+
+def deny_descriptor_writes(event, args):
+    if DESCRIPTORS["denied"] and event == "open" and isinstance(args[0], int):
+        DESCRIPTORS["seen"].append(args)
+        raise PermissionError("OrcaSlicer asked for permission to write to a file descriptor")
+
+
+sys.addaudithook(deny_descriptor_writes)
+
+
+@pytest.fixture
+def descriptor_writes_denied():
+    DESCRIPTORS.update(denied=True, seen=[])
+    yield DESCRIPTORS["seen"]
+    DESCRIPTORS["denied"] = False
 
 
 def kinds(app):
@@ -62,6 +85,14 @@ class TestSigningIn:
         assert (method, path) == ("GET", "/slicer/v2/printers")
         assert headers["Authorization"] == "Bearer " + tokens["access_token"]
         assert app.editor.selections == [(1, "Prusament PLA Galaxy Black")]
+
+    def test_keeps_the_sign_in_where_orcaslicer_audits_writes_by_path(self, app, descriptor_writes_denied):
+        """The first sign-in must be kept at once: Prusa Account has taken the code, which works once."""
+        ready(app)
+        assert app.sync().status is PluginResult.Success
+        assert descriptor_writes_denied == []
+        assert set(stored(app)) == {"access_token", "refresh_token"}
+        assert app.account_file.stat().st_mode & 0o777 == 0o600
 
     def test_asks_prusa_account_for_a_code_with_pkce(self, app):
         ready(app)

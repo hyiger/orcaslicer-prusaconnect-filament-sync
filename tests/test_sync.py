@@ -171,6 +171,26 @@ class TestProductName:
         assert selected(app) == [(1, "Prusa Polymers PLA 2.0 Galaxy Black")]
 
 
+    def test_a_shared_version_digit_says_nothing(self, app):
+        """1.0 and 2.0 share a 0, which counts no more than the versions do."""
+        stock(app, preset("Spike PLA+ 1.0 Black", "Spike", "PLA", "#000000"),
+              preset("Spike PLA+ Black", "Spike", "PLA", "#000000"))
+        printer(app, tool("PLA", "Spike", "PLA+ 2.0 Black", "#000000FF"))
+        succeeded(app.sync())
+        [row] = picker_rows(app)
+        assert labels(row) == ["Spike PLA+ Black", "Spike PLA+ 1.0 Black"]
+
+    @pytest.mark.parametrize("product, vendor, fiber", [
+        ("PETG Carbon Black", "Kimya", True),
+        ("ABS Carbon", "Spike", True),
+        ("PETG-CF Black", "Spike", True),
+        ("PLA Carbon Black", "Spike", False),
+        ("PLA Carbon Black", "", False),
+        ("Polycarbonate Black", "Kimya", False),
+    ])
+    def test_carbon_black_is_a_color_except_from_kimya(self, plugin, product, vendor, fiber):
+        assert plugin.names_fiber(product, vendor) is fiber
+
 class TestColor:
     def test_reads_the_color_name_from_the_product(self, app):
         stock(app, preset("Spike PLA Red", "Spike", "PLA", "#FF0000"),
@@ -222,6 +242,22 @@ class TestColor:
         assert app.dialogs == ["Select these filament presets to match Core One INDX in Prusa Connect?\n\n"
                                "Slot 1: Spike PLA Red, in place of Generic PLA (no installed Spike PLA preset is #008080)"]
 
+    def test_a_copy_named_for_a_color_is_not_its_parents(self, app):
+        """Spike PLA Blue, saved from Spike PLA Red, is no red preset."""
+        stock(app, preset("Spike PLA Blue", "Spike", "PLA", "#0000FF", parent="Spike PLA Red"))
+        printer(app, tool("PLA", "Spike", "PLA Red", "#FF0000FF"))
+        succeeded(app.sync())
+        assert selected(app) == [(1, "Spike PLA Blue")]
+        assert app.dialogs[0].endswith("(no installed Spike PLA preset is Red)")
+
+    def test_a_copy_named_for_no_color_is_its_parents(self, app):
+        stock(app, preset("My Spike PLA", "Spike", "PLA", parent="Spike PLA Red"),
+              preset("Spike PLA Blue", "Spike", "PLA", "#0000FF"))
+        printer(app, tool("PLA", "Spike", "PLA Red", "#FF0000FF"))
+        succeeded(app.sync())
+        assert selected(app) == [(1, "My Spike PLA")]
+        assert app.dialogs[0].endswith("Slot 1: My Spike PLA, in place of Generic PLA")
+
     @pytest.mark.parametrize("product, rgba, color", [
         ("PLA Galaxy Black", "#3D3D3DFF", "Black"),
         ("PLA Light Grey", "", "Gray"),
@@ -250,6 +286,20 @@ class TestAbrasive:
         printer(app, tool("PETG", "Prusament", "PETG Carbon Fiber Black", "#000000FF", hardened=False))
         succeeded(app.sync())
         assert app.dialogs[0].endswith("(it is abrasive, and the nozzle is not hardened)")
+
+    def test_kimyas_carbon_is_abrasive(self, app):
+        """Kimya's PETG Carbon Black is PETG with carbon fiber, whatever its preset says of the nozzle."""
+        stock(app, preset("Kimya PETG Carbon Black", "Kimya", "PETG", "#000000", hrc="0"))
+        printer(app, tool("PETG", "Kimya", "PETG Carbon Black", "#000000FF", hardened=False))
+        succeeded(app.sync())
+        assert selected(app) == [(1, "Kimya PETG Carbon Black")]
+        assert app.dialogs[0].endswith("(it is abrasive, and the nozzle is not hardened)")
+
+    def test_notes_an_abrasive_product_whose_preset_does_not_say(self, app):
+        stock(app, preset("Kimya PETG Black", "Kimya", "PETG", "#000000"))
+        printer(app, tool("PETG", "Kimya", "PETG Carbon Black", "#000000FF", hardened=False))
+        succeeded(app.sync())
+        assert app.dialogs[0].endswith("(PETG Carbon Black is abrasive, and the nozzle is not hardened)")
 
     def test_needs_no_hardened_nozzle_when_connect_does_not_say(self, app):
         entry = tool("PETG", "Prusament", "PETG Black", "#000000FF")
@@ -414,6 +464,23 @@ class TestChoosingThePrinter:
         assert succeeded(app.sync()).endswith(f"to match {name}.")
         assert windows(app, "printer") == []
 
+    @pytest.mark.parametrize("model, nozzles, name", [("Prusa XL 5T", 5, "XL 5T"), ("Prusa XL", 1, "XL")])
+    def test_the_number_of_tools_tells_xl_printers_apart(self, app, model, nozzles, name):
+        """Connect's XLIS and XL5IS share only XL with the profile's model."""
+        red = tool("PLA", "Spike", "PLA Red", "#FF0000FF")
+        app.cloud.printers = [connect_printer("XL", [red], legacy="XLIS", model="XL", supported=["XLIS"]),
+                              connect_printer("XL 5T", [red] * 5, legacy="XL5IS", model="XL", supported=["XL5IS"])]
+        stock(app, preset("Spike PLA Red", "Spike", "PLA", "#FF0000"))
+        app.state.config.update(printer_model=model, nozzle_diameter=",".join(["0.4"] * nozzles))
+        assert succeeded(app.sync()).endswith(f"to match {name}.")
+        assert windows(app, "printer") == []
+
+    def test_counts_the_tools_listed_without_a_count(self, plugin):
+        entry = connect_printer(tools=[connect_tool("PLA"), None, connect_tool("PETG")])
+        del entry["tool_count"]
+        entry["tools"]["7"] = "unreadable"
+        assert plugin.read_printer(entry).tool_count == 3
+
     def test_asks_when_several_fit(self, app):
         printers(app, INDX_8T, dict(INDX_8T, name="INDX 8 B", uuid="b", state="PRINTING"))
         app.answers["printer"] = lambda data: {"index": 1}
@@ -514,6 +581,19 @@ class TestSelecting:
         [row] = picker_rows(app)
         assert labels(row) == ["Spike PLA Red", "Spike PLA Scarlet Red"]
         assert selected(app) == []
+
+    def test_judges_the_slots_preset_by_its_unsaved_edits(self, app):
+        """Spike PLA Red, edited to PETG and not saved, is no PLA, so the PLA preset the slot can take replaces it."""
+        stock(app, preset("Spike PLA Red", "Spike", "PLA", "#FF0000"),
+              preset("Spike PLA Scarlet Red", "Spike", "PLA", "#FF2400"))
+        slots(app, "Spike PLA Red")
+        app.filaments.select("Spike PLA Red")
+        app.filaments.edited = preset("Spike PLA Red", "Spike", "PETG", "#FF0000")
+        printer(app, tool("PLA", "Spike", "", "#FF0000FF"))
+        succeeded(app.sync())
+        assert windows(app, "picker") == []
+        assert selected(app) == [(1, "Spike PLA Scarlet Red")]
+        assert app.dialogs[0].endswith("Slot 1: Spike PLA Scarlet Red, in place of Spike PLA Red")
 
     def test_reads_a_slot_whose_preset_is_gone(self, app):
         self.red(app)
