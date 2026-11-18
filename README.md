@@ -18,10 +18,16 @@ When several printers in your account fit the printer profile, it asks which one
 
 ## Signing in
 
-Prusa offers no tokens for other apps, so the plugin signs in as the Prusa Connect web app does, with its public OAuth client:
+Prusa offers no tokens for other apps, so the plugin signs in as the Prusa Connect web app does, with its public OAuth client. You do this once: the plugin keeps the sign-in and renews it as you sync.
 
-1. The dialog shows an address on `account.prusa3d.com`. Copy it into your web browser and sign in to your Prusa Account.
-2. The browser then opens Prusa Connect. The first address it opens starts with `https://connect.prusa3d.com/login/auth-callback?code=`, and Prusa Connect soon moves on from it. Copy that address from the address bar, or from the browser's history, and paste it into the dialog. The code alone works too.
+1. The dialog shows an address that starts with `view-source:https://account.prusa3d.com/o/authorize/`. Press **Copy**, paste it into the address bar of Chrome, Edge or Firefox, and press Return.
+2. The browser shows a page of code. Its address starts with `view-source:https://connect.prusa3d.com/login/auth-callback?code=`. Copy that address and paste it into the dialog. The code alone works too.
+
+If the page of code is Prusa Account's sign-in page instead, you are not signed in to Prusa Account in that browser: sign in at [account.prusa3d.com](https://account.prusa3d.com), then paste the address again.
+
+Why `view-source:`: Prusa Account sends the browser to Prusa Connect's own sign-in page with the code. That page, finding a code it did not ask for, says "We could not sign you in" and replaces the address, so the code is gone from the address bar and from the history. In `view-source:` the browser follows Prusa Account to that page but shows its code without running it, so the address stays. Safari does not open `view-source:` addresses. There, open the address without `view-source:` with the Web Inspector's **Network** tab open and **Preserve Log** on, and copy the `auth-callback` request's address.
+
+OrcaSlicer's own Prusa Connect connection cannot stand in for the sign-in: its API key only uploads G-code, and Prusa Connect refuses it for the printer list.
 
 The address works once and for a few minutes. The plugin keeps the sign-in in `prusa_account.json` in its own folder, readable only by you, and renews it as you sync: an access token lasts 2 hours, and Prusa Account replaces the refresh token at each renewal. You sign in again only after a long break (the refresh token lasts about 30 days), after a sign-out, or after reinstalling the plugin.
 
@@ -81,7 +87,7 @@ The workflow stops if the tag is not the header's version.
 The unit tests cannot reach the steps below, which need the running app and a real Prusa Account.
 
 - [ ] Install the plugin. OrcaSlicer asks once for permission to reach both Prusa hosts.
-- [ ] Sync. The sign-in dialog opens. Sign in in the browser, paste the callback address, and the sync goes on. `prusa_account.json` appears in the plugin's folder.
+- [ ] Sync. The sign-in dialog opens. Copy the address into Chrome, copy the `view-source:` callback address it shows, paste it, and the sync goes on. `prusa_account.json` appears in the plugin's folder.
 - [ ] Sync again. No sign-in is asked for.
 - [ ] Assign `3D Fuel Pro PCTG, Translucent Yellow` to tool 1 in Connect, with `Daffodil Yellow` selected in slot 1. Sync selects `Translucent Yellow`, without a list.
 - [ ] With two printers in the account, sync. It reads the one that fits the profile, or asks.

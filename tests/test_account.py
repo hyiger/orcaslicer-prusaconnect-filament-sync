@@ -100,7 +100,9 @@ class TestSigningIn:
         [window] = app.windows
         assert window.title == "Sign in to Prusa Connect"
         assert window.data["reason"] == ""
-        url = urllib.parse.urlsplit(window.data["url"])
+        # view-source: keeps Prusa Connect's callback page from running, and replacing the address.
+        assert window.data["url"].startswith("view-source:")
+        url = urllib.parse.urlsplit(window.data["url"].removeprefix("view-source:"))
         query = dict(urllib.parse.parse_qsl(url.query))
         assert url.path == "/o/authorize/"
         assert query["client_id"] == app.cloud.CLIENT_ID
@@ -108,7 +110,7 @@ class TestSigningIn:
         assert (query["response_type"], query["scope"], query["code_challenge_method"]) == ("code", "basic_info", "S256")
         assert len(query["state"]) >= 16
         # The page names the address to paste.
-        assert "login/auth-callback?code=" in window.html
+        assert "view-source:https://connect.prusa3d.com/login/auth-callback?code=" in window.html
 
     def test_a_later_sync_uses_the_kept_sign_in(self, app):
         ready(app)
@@ -118,6 +120,7 @@ class TestSigningIn:
         assert token_requests(app) == []
 
     @pytest.mark.parametrize("text", [
+        "view-source:{redirect}?code={code}&state={state}",
         "{redirect}?code={code}&state={state}",
         "  {redirect}?code={code}&state={state}#fragment  ",
         "?code={code}&state={state}",
@@ -144,8 +147,8 @@ class TestSigningIn:
          "That address comes from an earlier sign-in. Run this again, and paste the address this sign-in leads to."),
         (pasting("https://connect.prusa3d.com/login/auth-callback?error=access_denied"),
          "Prusa Account did not sign you in: access_denied."),
-        (pasting("not a code!"), "The pasted text holds no sign-in code. Paste the address that starts with "
-                                 "https://connect.prusa3d.com/login/auth-callback?code="),
+        (pasting("not a code!"), "The pasted text holds no sign-in code. Paste the address the browser shows, "
+                                 "which starts with view-source:https://connect.prusa3d.com/login/auth-callback?code="),
     ])
     def test_says_why_it_did_not_sign_in(self, app, answer, message):
         ready(app)

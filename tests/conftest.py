@@ -373,11 +373,12 @@ def cloud():
 
 
 def signs_in(cloud):
-    """The user, who signs in in the browser and pastes the address Prusa Connect opened."""
+    """The user, who opens the view-source: address in the browser, signs in, and pastes the address it shows."""
     def answer(data):
-        query = urllib.parse.parse_qs(urllib.parse.urlsplit(data["url"]).query)
+        assert data["url"].startswith("view-source:")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(data["url"].removeprefix("view-source:")).query)
         code = cloud.authorize(query["code_challenge"][0])
-        return {"address": f"{cloud.REDIRECT_URI}?code={code}&state={query['state'][0]}"}
+        return {"address": f"view-source:{cloud.REDIRECT_URI}?code={code}&state={query['state'][0]}"}
     return answer
 
 

@@ -50,6 +50,7 @@ CONNECT_URL = "https://connect.prusa3d.com"
 ACCOUNT_URL = "https://account.prusa3d.com"
 PRINTERS_PATH = "/slicer/v2/printers"
 AUTHORIZE_PATH = "/o/authorize/"
+VIEW_SOURCE = "view-source:"
 TOKEN_PATH = "/o/token/"
 # The Prusa Connect web app's public OAuth client. Its redirect is an ordinary page on Prusa Connect, which
 # leaves the code in the browser's address bar and history, and ignores a code whose state it did not issue.
@@ -117,7 +118,7 @@ PICKER_ROW_HEIGHT = 62
 PICKER_NOTE_HEIGHT = 18
 PICKER_DETAIL_LENGTH = 55
 PICKER_MAX_HEIGHT = 700
-SIGN_IN_HEIGHT = 420
+SIGN_IN_HEIGHT = 470
 PRINTER_BASE_HEIGHT = 190
 PRINTER_ROW_HEIGHT = 30
 DIALOG_POLL_SECONDS = 0.25
@@ -172,14 +173,16 @@ document.addEventListener("keydown", event => {
 """
 SIGN_IN_BODY = """
 <p id="reason"></p>
-<p>1. Open this address in your web browser, and sign in to your Prusa Account.</p>
+<p>1. Copy this address, paste it into the address bar of Chrome, Edge or Firefox, and press Return.</p>
 <div class="field"><input id="url" readonly><button id="copy">Copy</button></div>
-<p>2. The browser then opens Prusa Connect. The first address it opens starts with
-<b>https://connect.prusa3d.com/login/auth-callback?code=</b>, and Prusa Connect soon moves on from it. Copy that
-address from the address bar, or from the browser's history, and paste it here.</p>
-<div class="field"><input id="address" placeholder="https://connect.prusa3d.com/login/auth-callback?code=..."></div>
-<p class="muted">The address works once, and for a few minutes. The sign-in is kept in the plugin's folder and
-renewed as you sync, so you sign in again only after a long break, or after Sign out of Prusa Connect.</p>
+<p>2. The browser shows a page of code. Copy its address, which starts with
+<b>view-source:https://connect.prusa3d.com/login/auth-callback?code=</b>, and paste it here.</p>
+<div class="field"><input id="address" placeholder="view-source:https://connect.prusa3d.com/login/auth-callback?code=..."></div>
+<p class="muted">If the page of code is Prusa Account's sign-in page instead, sign in at account.prusa3d.com in
+that browser, then paste the address again. The address starts with view-source: so that Prusa Connect's own page
+does not run, as it would take the sign-in for itself. It works once, and for a few minutes.
+The sign-in is kept in the plugin's folder and renewed as you sync, so you sign in again only after a month
+without syncing, or after Sign out of Prusa Connect.</p>
 """
 SIGN_IN_SCRIPT = """
 const reason = document.getElementById("reason");
@@ -416,7 +419,7 @@ def request_tokens(form):
 
 def code_from(text, state):
     """Return the authorization code in what the user pasted: the address Prusa Account sent the browser to,
-    its query, or the code alone."""
+    with or without view-source:, its query, or the code alone."""
     text = text.strip().split("#", 1)[0]
     if not text:
         raise SyncError("No address was pasted, so you are not signed in, and nothing was changed.")
@@ -430,8 +433,8 @@ def code_from(text, state):
         raise SyncError(f"Prusa Account did not sign you in: {params['error'][0]}.")
     if re.fullmatch(r"[A-Za-z0-9._~-]+", text):
         return text
-    raise SyncError("The pasted text holds no sign-in code. Paste the address that starts with "
-                    f"{REDIRECT_URI}?code=")
+    raise SyncError("The pasted text holds no sign-in code. Paste the address the browser shows, which starts "
+                    f"with {VIEW_SOURCE}{REDIRECT_URI}?code=")
 
 
 def private_file(path, flags):
@@ -506,8 +509,10 @@ class Account:
             "code_challenge": b64url(hashlib.sha256(verifier.encode()).digest()), "code_challenge_method": "S256",
             "state": state,
         })
-        answer = show_dialog(page(SIGN_IN_BODY, SIGN_IN_SCRIPT, "Sign in", {"kind": "sign_in", "url": url,
-                                                                            "reason": reason}),
+        # Shown as view-source: so that the browser stops on Prusa Connect's callback page without running it:
+        # the page would replace the address, code and all, as it cannot use a code it did not ask for.
+        answer = show_dialog(page(SIGN_IN_BODY, SIGN_IN_SCRIPT, "Sign in",
+                                  {"kind": "sign_in", "url": VIEW_SOURCE + url, "reason": reason}),
                              "Sign in to Prusa Connect", SIGN_IN_HEIGHT)
         address = answer.get("address") if isinstance(answer, dict) else None
         if not isinstance(address, str):
